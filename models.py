@@ -17,3 +17,5 @@ class Task(db.Model):
     priority = db.Column(db.String(10), nullable=False, default="Med")
     status = db.Column(db.String(10), nullable=False, default="todo")
     created_at = db.Column(db.DateTime, nullable=False, default=datetime.now)
+    start_date = db.Column(db.DateTime, nullable=True)
+    due_date = db.Column(db.DateTime, nullable=True)

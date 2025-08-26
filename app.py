@@ -1,8 +1,9 @@
 
 from datetime import datetime
-from flask import Flask, render_template_string, request, redirect, url_for, session
+from flask import Flask, render_template_string, request, redirect, url_for, session, jsonify
 
 from models import db, User, Task
+from ganttChart import create_gantt_chart
 
 # ==== 設定 ====
 app = Flask(__name__)
@@ -61,12 +62,23 @@ def create_task():
   title = (request.form.get("title") or "").strip()
   detail = (request.form.get("detail") or "").strip()
   priority = request.form.get("priority") or "Med"
+  start_date = request.form.get("start_date")
+  due_date = request.form.get("due_date")
   user_id = session.get("user_id")
+  
   if not title:
     return "Title is required", 400
   if priority not in PRIORITIES:
     return "Invalid priority", 400
-  t = Task(title=title, detail=detail, priority=priority, user_id=user_id)
+    
+  t = Task(
+    title=title,
+    detail=detail,
+    priority=priority,
+    user_id=user_id,
+    start_date=datetime.strptime(start_date, '%Y-%m-%d') if start_date else None,
+    due_date=datetime.strptime(due_date, '%Y-%m-%d') if due_date else None
+  )
   db.session.add(t)
   db.session.commit()
   return redirect(url_for("index"))
@@ -88,6 +100,13 @@ def delete_task(task_id):
     db.session.commit()
     return redirect(url_for("index", **request.args))
 
+@app.get("/gantt-data")
+def get_gantt_data():
+    chart_json = create_gantt_chart()
+    if chart_json is None:
+        return jsonify({"error": "No tasks found"})
+    return jsonify({"chart_data": chart_json})
+
 # ==== 最小テンプレート ====
 TEMPLATE = """
 <!doctype html>
@@ -96,6 +115,15 @@ TEMPLATE = """
   <meta charset="utf-8"/>
   <title>Mini Task Board</title>
   <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet"/>
+  <script src="https://cdn.plot.ly/plotly-latest.min.js"></script>
+  <style>
+    #gantt-chart {
+      display: none;
+    }
+    #task-list.hidden {
+      display: none;
+    }
+  </style>
 </head>
 <body class="bg-light">
 <div class="container py-4">
@@ -138,6 +166,27 @@ TEMPLATE = """
     </div>
   </form>
 
+  <!-- ビュー切り替え -->
+  <div class="mb-3">
+    <div class="form-check form-check-inline">
+      <input class="form-check-input" type="radio" name="view_type" id="view_list" value="list" checked onchange="toggleView(this.value)">
+      <label class="form-check-label" for="view_list">リスト</label>
+    </div>
+    <div class="form-check form-check-inline">
+      <input class="form-check-input" type="radio" name="view_type" id="view_gantt" value="gantt" onchange="toggleView(this.value)">
+      <label class="form-check-label" for="view_gantt">ガントチャート</label>
+    </div>
+  </div>
+
+  <!-- ガントチャート -->
+  <div id="gantt-chart" class="card mb-3">
+    <div class="card-body">
+      <div id="gantt-container"></div>
+    </div>
+  </div>
+
+  <!-- タスクリスト -->
+  <div id="task-list">
   <!-- 新規作成 -->
   <div class="card mb-3">
     <div class="card-body">
@@ -146,6 +195,12 @@ TEMPLATE = """
         <div class="row g-2">
           <div class="col-md-4">
             <input name="title" class="form-control" placeholder="Title (required)" maxlength="100" required>
+          </div>
+          <div class="col-md-2">
+            <input type="date" name="start_date" class="form-control" title="開始日">
+          </div>
+          <div class="col-md-2">
+            <input type="date" name="due_date" class="form-control" title="期限日">
           </div>
           <div class="col-md-4">
             <input name="detail" class="form-control" placeholder="Detail (optional)">
@@ -164,18 +219,19 @@ TEMPLATE = """
   </div>
 
   <!-- 一覧 -->
-  <div class="list-group">
-    {% for t in tasks %}
-      <div class="list-group-item">
-        <div class="d-flex justify-content-between">
-          <div>
-            <strong>[{{ t.priority }}]</strong>
-            <span class="badge text-bg-{{ 'success' if t.status=='done' else ('warning' if t.status=='doing' else 'secondary') }}">
+  <div id="task-list">
+    <div class="list-group">
+      {% for t in tasks %}
+        <div class="list-group-item">
+          <div class="d-flex justify-content-between">
+            <div>
+              <span class="ms-1">title : {{ t.title }}</span>
+              <strong>[{{ t.priority }}]</strong>
+              <span class="badge text-bg-{{ 'success' if t.status=='done' else ('warning' if t.status=='doing' else 'secondary') }}">
               {{ t.status }}
             </span>
-            <span class="ms-1">{{ t.title }}</span>
-            {% if t.detail %}<div class="text-muted small">{{ t.detail }}</div>{% endif %}
-            <div class="text-muted small">#{{t.id}} / {{t.created_at.strftime('%Y-%m-%d %H:%M')}}</div>
+            {% if t.detail %}<div class="text-muted small">detail : {{ t.detail }}</div>{% endif %}
+            <div class="text-muted small">#{{t.id}} / {{t.created_at.strftime('%Y-%m-%d %H:%M')}} / {{t.start_date.strftime('%Y-%m-%d')}} to {{t.due_date.strftime('%Y-%m-%d')}}</div>
           </div>
           <div class="d-flex gap-2">
             <form method="post" action="{{ url_for('update_status', task_id=t.id) }}">
@@ -201,6 +257,39 @@ TEMPLATE = """
     {% endfor %}
   </div>
 </div>
+
+<script>
+function toggleView(viewType) {
+  const taskList = document.getElementById('task-list');
+  const ganttChart = document.getElementById('gantt-chart');
+  
+  if (viewType === 'list') {
+    taskList.style.display = 'block';
+    ganttChart.style.display = 'none';
+  } else {
+    taskList.style.display = 'none';
+    ganttChart.style.display = 'block';
+    loadGanttChart();
+  }
+}
+
+function loadGanttChart() {
+  fetch('/gantt-data')
+    .then(response => response.json())
+    .then(data => {
+      if (data.error) {
+        document.getElementById('gantt-container').innerHTML = '<div class="alert alert-info">タスクが見つかりません</div>';
+        return;
+      }
+      const chartData = JSON.parse(data.chart_data);
+      Plotly.newPlot('gantt-container', chartData.data, chartData.layout);
+    })
+    .catch(error => {
+      console.error('Error loading gantt chart:', error);
+      document.getElementById('gantt-container').innerHTML = '<div class="alert alert-danger">ガントチャートの読み込みに失敗しました</div>';
+    });
+}
+</script>
 </body>
 </html>
 """
