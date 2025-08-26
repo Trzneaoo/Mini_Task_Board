@@ -1,0 +1,28 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.so
+
+# データベース
+instance/
+*.db
+*.sqlite
+*.sqlite3
+
+# VS Code
+.vscode/
+*.code-workspace
+
+# 環境設定
+.env
+.venv
+env/
+venv/
+ENV/
+
+# その他
+.DS_Store
+Thumbs.db
