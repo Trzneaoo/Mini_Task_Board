@@ -14,6 +14,7 @@ class Task(db.Model):
     user_id = db.Column(db.Integer, nullable=True)  # ユーザーID（未ログイン時はnull）
     title = db.Column(db.String(100), nullable=False)
     detail = db.Column(db.Text, nullable=True)
-    priority = db.Column(db.String(10), nullable=False, default="Med")
+    priority = db.Column(db.String(10), nullable=False, default="Mid")
     status = db.Column(db.String(10), nullable=False, default="todo")
+    due_date = db.Column(db.DateTime, nullable=True)
     created_at = db.Column(db.DateTime, nullable=False, default=datetime.now)

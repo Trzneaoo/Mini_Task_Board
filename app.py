@@ -1,6 +1,6 @@
 
-from datetime import datetime
-from flask import Flask, render_template_string, request, redirect, url_for, session
+from datetime import datetime, date
+from flask import Flask, render_template_string, request, redirect, url_for, session, abort
 
 from models import db, User, Task
 
@@ -16,7 +16,7 @@ app.config["SQLALCHEMY_BINDS"] = {
 app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
 db.init_app(app)
 
-PRIORITIES = ["Low", "Med", "High"]
+PRIORITIES = ["Low", "Mid", "High"]
 STATUSES = ["todo", "doing", "done"]
 
 # DB作成（両DB）
@@ -53,20 +53,22 @@ def index():
   tasks = q.order_by(Task.created_at.desc()).all()
   return render_template_string(TEMPLATE, tasks=tasks,
                   status=status, priority=priority,
-                  view_mode=view_mode,
+                  view_mode=view_mode, datetime=datetime, date=date,
                   PRIORITIES=PRIORITIES, STATUSES=STATUSES)
 
 @app.post("/tasks")
 def create_task():
   title = (request.form.get("title") or "").strip()
   detail = (request.form.get("detail") or "").strip()
-  priority = request.form.get("priority") or "Med"
+  due_date_str = request.form.get("due_date")
+  due_date = datetime.strptime(due_date_str, "%Y-%m-%d") if due_date_str else None
+  priority = request.form.get("priority") or "Mid"
   user_id = session.get("user_id")
   if not title:
     return "Title is required", 400
   if priority not in PRIORITIES:
     return "Invalid priority", 400
-  t = Task(title=title, detail=detail, priority=priority, user_id=user_id)
+  t = Task(title=title, detail=detail, priority=priority, user_id=user_id, due_date=due_date)
   db.session.add(t)
   db.session.commit()
   return redirect(url_for("index"))
@@ -77,6 +79,8 @@ def update_status(task_id):
     if new_status not in STATUSES:
         return "Invalid status", 400
     t = Task.query.get_or_404(task_id)
+    if t.user_id != session.get("user_id"):
+        abort(403)  # Forbidden
     t.status = new_status
     db.session.commit()
     return redirect(url_for("index", **request.args))
@@ -84,7 +88,28 @@ def update_status(task_id):
 @app.post("/tasks/<int:task_id>/delete")
 def delete_task(task_id):
     t = Task.query.get_or_404(task_id)
+    if t.user_id != session.get("user_id"):
+        abort(403)  # Forbidden
     db.session.delete(t)
+    db.session.commit()
+    return redirect(url_for("index", **request.args))
+
+@app.post("/tasks/<int:task_id>/update")
+def update_task(task_id):
+    t = Task.query.get_or_404(task_id)
+    if t.user_id != session.get("user_id"):
+        abort(403)  # Forbidden
+
+    t.title = (request.form.get("title") or "").strip()
+    t.detail = (request.form.get("detail") or "").strip()
+    t.priority = request.form.get("priority")
+    due_date_str = request.form.get("due_date")
+    t.due_date = datetime.strptime(due_date_str, "%Y-%m-%d") if due_date_str else None
+
+    if not t.title:
+        return "Title is required", 400
+    if t.priority not in PRIORITIES:
+        return "Invalid priority", 400
     db.session.commit()
     return redirect(url_for("index", **request.args))
 
@@ -96,6 +121,7 @@ TEMPLATE = """
   <meta charset="utf-8"/>
   <title>Mini Task Board</title>
   <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet"/>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css">
 </head>
 <body class="bg-light">
 <div class="container py-4">
@@ -144,11 +170,14 @@ TEMPLATE = """
       <h5 class="card-title">New Task</h5>
       <form method="post" action="{{ url_for('create_task') }}">
         <div class="row g-2">
-          <div class="col-md-4">
+          <div class="col-md-3">
             <input name="title" class="form-control" placeholder="Title (required)" maxlength="100" required>
           </div>
-          <div class="col-md-4">
-            <input name="detail" class="form-control" placeholder="Detail (optional)">
+          <div class="col-md-3">
+            <textarea name="detail" class="form-control" placeholder="Detail (optional)" rows="1"></textarea>
+          </div>
+          <div class="col-md-2">
+            <input type="date" name="due_date" class="form-control" title="Due Date">
           </div>
           <div class="col-md-2">
             <select name="priority" class="form-select">
@@ -174,24 +203,77 @@ TEMPLATE = """
               {{ t.status }}
             </span>
             <span class="ms-1">{{ t.title }}</span>
-            {% if t.detail %}<div class="text-muted small">{{ t.detail }}</div>{% endif %}
-            <div class="text-muted small">#{{t.id}} / {{t.created_at.strftime('%Y-%m-%d %H:%M')}}</div>
+            {% if t.detail %}<div class="text-muted small" style="white-space: pre-wrap;">{{ t.detail }}</div>{% endif %}
+            <div class="d-flex align-items-center gap-3">
+              <div class="text-muted small">#{{t.id}} / {{t.created_at.strftime('%Y-%m-%d %H:%M')}}</div>
+              {% if t.due_date %}
+                <div class="small {{ 'text-danger fw-bold' if not t.status == 'done' and t.due_date.date() < date.today() else 'text-muted' }}">
+                  <i class="bi bi-calendar-x"></i>
+                  Due: {{ t.due_date.strftime('%Y-%m-%d') }}
+                </div>
+              {% endif %}
+            </div>
           </div>
-          <div class="d-flex gap-2">
+          <div class="d-flex gap-1 align-items-center">
             <form method="post" action="{{ url_for('update_status', task_id=t.id) }}">
               <input type="hidden" name="status" value="todo">
-              <button class="btn btn-sm btn-outline-secondary" {{'disabled' if t.status=='todo' else ''}}>todo</button>
+              <button class="btn btn-sm {{ 'btn-secondary' if t.status == 'todo' else 'btn-outline-secondary' }}" {{'disabled' if t.status=='todo' else ''}}>todo</button>
             </form>
             <form method="post" action="{{ url_for('update_status', task_id=t.id) }}">
               <input type="hidden" name="status" value="doing">
-              <button class="btn btn-sm btn-outline-warning" {{'disabled' if t.status=='doing' else ''}}>doing</button>
+              <button class="btn btn-sm {{ 'btn-warning' if t.status == 'doing' else 'btn-outline-warning' }}" {{'disabled' if t.status=='doing' else ''}}>doing</button>
             </form>
             <form method="post" action="{{ url_for('update_status', task_id=t.id) }}">
               <input type="hidden" name="status" value="done">
-              <button class="btn btn-sm btn-outline-success" {{'disabled' if t.status=='done' else ''}}>done</button>
+              <button class="btn btn-sm {{ 'btn-success' if t.status == 'done' else 'btn-outline-success' }}" {{'disabled' if t.status=='done' else ''}}>done</button>
             </form>
+            <button type="button" class="btn btn-sm btn-outline-primary" data-bs-toggle="modal" data-bs-target="#editModal{{ t.id }}" title="Edit">
+              <i class="bi bi-pencil"></i>
+            </button>
             <form method="post" action="{{ url_for('delete_task', task_id=t.id) }}" onsubmit="return confirm('Delete?');">
-              <button class="btn btn-sm btn-outline-danger">delete</button>
+              <button class="btn btn-sm btn-outline-danger" title="Delete"><i class="bi bi-trash"></i></button>
+            </form>
+          </div>
+        </div>
+      </div>
+
+      <!-- Edit Modal -->
+      <div class="modal fade" id="editModal{{ t.id }}" tabindex="-1" aria-labelledby="editModalLabel{{ t.id }}" aria-hidden="true">
+        <div class="modal-dialog">
+          <div class="modal-content">
+            <form method="post" action="{{ url_for('update_task', task_id=t.id) }}">
+              <div class="modal-header">
+                <h5 class="modal-title" id="editModalLabel{{ t.id }}">Edit Task #{{ t.id }}</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+              </div>
+              <div class="modal-body">
+                <div class="mb-3">
+                  <label class="form-label">Title</label>
+                  <input name="title" class="form-control" value="{{ t.title }}" required>
+                </div>
+                <div class="mb-3">
+                  <label class="form-label">Detail</label>
+                  <textarea name="detail" class="form-control" rows="3">{{ t.detail or '' }}</textarea>
+                </div>
+                <div class="row">
+                  <div class="col">
+                    <label class="form-label">Priority</label>
+                    <select name="priority" class="form-select">
+                      {% for p in PRIORITIES %}
+                      <option value="{{p}}" {{ 'selected' if p == t.priority }}>{{p}}</option>
+                      {% endfor %}
+                    </select>
+                  </div>
+                  <div class="col">
+                    <label class="form-label">Due Date</label>
+                    <input type="date" name="due_date" class="form-control" value="{{ t.due_date.strftime('%Y-%m-%d') if t.due_date }}">
+                  </div>
+                </div>
+              </div>
+              <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
+                <button type="submit" class="btn btn-primary">Save changes</button>
+              </div>
             </form>
           </div>
         </div>
@@ -201,6 +283,7 @@ TEMPLATE = """
     {% endfor %}
   </div>
 </div>
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
 </body>
 </html>
 """
