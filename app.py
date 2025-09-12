@@ -132,14 +132,16 @@ TEMPLATE = """
   <!-- フィルタ -->
   <form class="row g-2 align-items-end mb-3" method="get">
     <div class="col-auto">
-      <label class="form-label">Type of task</label><br>
-      <div class="form-check form-check-inline">
-        <input class="form-check-input" type="radio" name="view_mode" id="view_personal" value="personal" {% if view_mode != 'all' %}checked{% endif %} onchange="this.form.submit()">
-        <label class="form-check-label" for="view_personal">My task</label>
-      </div>
-      <div class="form-check form-check-inline">
-        <input class="form-check-input" type="radio" name="view_mode" id="view_all" value="all" {% if view_mode == 'all' %}checked{% endif %} onchange="this.form.submit()">
-        <label class="form-check-label" for="view_all">All task</label>
+      <label class="form-label">Type of task</label>
+      <div class="d-flex align-items-center" style="height: 38px;">
+        <div class="form-check form-check-inline">
+          <input class="form-check-input" type="radio" name="view_mode" id="view_personal" value="personal" {% if view_mode != 'all' %}checked{% endif %} onchange="this.form.submit()">
+          <label class="form-check-label" for="view_personal">My task</label>
+        </div>
+        <div class="form-check form-check-inline">
+          <input class="form-check-input" type="radio" name="view_mode" id="view_all" value="all" {% if view_mode == 'all' %}checked{% endif %} onchange="this.form.submit()">
+          <label class="form-check-label" for="view_all">All task</label>
+        </div>
       </div>
     </div>
     <div class="col-auto">
@@ -164,19 +166,21 @@ TEMPLATE = """
       <button class="btn btn-secondary">Filter</button>
       <a class="btn btn-outline-secondary" href="{{ url_for('index') }}">Clear</a>
     </div>
+    <div class="col-auto">
+      <!-- ビュー切り替え -->
+      <label class="form-label">View</label>
+      <div class="d-flex align-items-center" style="height: 38px;">
+        <div class="form-check form-check-inline">
+          <input class="form-check-input" type="radio" name="view_type" id="view_list" value="list" checked onchange="toggleView(this.value)">
+          <label class="form-check-label" for="view_list">List</label>
+        </div>
+        <div class="form-check form-check-inline">
+          <input class="form-check-input" type="radio" name="view_type" id="view_gantt" value="gantt" onchange="toggleView(this.value)">
+          <label class="form-check-label" for="view_gantt">Gantt Chart</label>
+        </div>
+      </div>
+    </div>
   </form>
-
-  <!-- ビュー切り替え -->
-  <div class="mb-3">
-    <div class="form-check form-check-inline">
-      <input class="form-check-input" type="radio" name="view_type" id="view_list" value="list" checked onchange="toggleView(this.value)">
-      <label class="form-check-label" for="view_list">リスト</label>
-    </div>
-    <div class="form-check form-check-inline">
-      <input class="form-check-input" type="radio" name="view_type" id="view_gantt" value="gantt" onchange="toggleView(this.value)">
-      <label class="form-check-label" for="view_gantt">ガントチャート</label>
-    </div>
-  </div>
 
   <!-- ガントチャート -->
   <div id="gantt-chart" class="card mb-3">
@@ -231,7 +235,7 @@ TEMPLATE = """
               {{ t.status }}
             </span>
             {% if t.detail %}<div class="text-muted small">detail : {{ t.detail }}</div>{% endif %}
-            <div class="text-muted small">#{{t.id}} / {{t.created_at.strftime('%Y-%m-%d %H:%M')}} / {{t.start_date.strftime('%Y-%m-%d')}} to {{t.due_date.strftime('%Y-%m-%d')}}</div>
+            <div class="text-muted small">#{{t.id}} / {{t.created_at.strftime('%Y-%m-%d %H:%M')}} / {{t.start_date.strftime('%Y-%m-%d') if t.start_date else 'N/A'}} to {{t.due_date.strftime('%Y-%m-%d') if t.due_date else 'N/A'}}</div>
           </div>
           <div class="d-flex gap-2">
             <form method="post" action="{{ url_for('update_status', task_id=t.id) }}">
