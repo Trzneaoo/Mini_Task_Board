@@ -18,6 +18,7 @@ db.init_app(app)
 
 PRIORITIES = ["Low", "Mid", "High"]
 STATUSES = ["todo", "doing", "done"]
+SORT_OPTIONS = ["Priority", "Due Date"]
 
 # DB作成（両DB）
 with app.app_context():
@@ -43,6 +44,26 @@ def index():
   status = request.args.get("status")
   priority = request.args.get("priority")
   view_mode = request.args.get("view_mode", "personal")
+  sort_by = request.args.get("sort_by") or "Created At (Newest First)"
+  if sort_by == "Priority":
+    q = q.order_by(
+        db.case(
+          (Task.priority == "High", 1),
+          (Task.priority == "Mid", 2),
+          (Task.priority == "Low", 3),
+        ),
+        Task.due_date.asc().nulls_last(),
+        Task.created_at.desc(),
+    )
+  elif sort_by == "Due Date":
+    # Due Date昇順、NULLは最後
+    q = q.order_by(
+        Task.due_date.asc().nulls_last(),
+        Task.created_at.desc()
+    )
+  else:
+    q = q.order_by(Task.created_at.desc())
+
   user_id = session.get("user_id")
   if view_mode == "personal" and user_id:
     q = q.filter_by(user_id=user_id)
@@ -50,10 +71,13 @@ def index():
     q = q.filter_by(status=status)
   if priority in PRIORITIES:
     q = q.filter_by(priority=priority)
-  tasks = q.order_by(Task.created_at.desc()).all()
+
+  tasks = q.all()
+
   return render_template_string(TEMPLATE, tasks=tasks,
                   status=status, priority=priority,
-                  view_mode=view_mode, datetime=datetime, date=date,
+                  view_mode=view_mode, sort_by=sort_by, SORT_OPTIONS=SORT_OPTIONS,
+                  datetime=datetime, date=date,
                   PRIORITIES=PRIORITIES, STATUSES=STATUSES)
 
 @app.post("/tasks")
@@ -122,6 +146,12 @@ TEMPLATE = """
   <title>Mini Task Board</title>
   <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet"/>
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css">
+  <style>
+    /* optional: アニメーション中の見た目微調整 */
+    .list-group-item {
+      will-change: transform;
+    }
+  </style>
 </head>
 <body class="bg-light">
 <div class="container py-4">
@@ -160,6 +190,17 @@ TEMPLATE = """
     </div>
     <div class="col-auto">
       <button class="btn btn-secondary">Filter</button>
+    </div>
+    <div class="col-auto">
+      <label class="form-label">Sort by</label>
+      <select id="sortSelect" name="sort_by" class="form-select" onchange="this.form.submit()">
+        <option value="">Created At (Newest First)</option>
+        {% for option in SORT_OPTIONS %}
+          <option value="{{option}}" {{'selected' if sort_by==option else ''}}>{{option}}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div class="col-auto">
       <a class="btn btn-outline-secondary" href="{{ url_for('index') }}">Clear</a>
     </div>
   </form>
@@ -193,9 +234,12 @@ TEMPLATE = """
   </div>
 
   <!-- 一覧 -->
-  <div class="list-group">
+  <div class="list-group" id="taskList">
     {% for t in tasks %}
-      <div class="list-group-item">
+      <div class="list-group-item" data-id="{{t.id}}"
+           data-priority="{{t.priority}}"
+           data-due="{{ t.due_date.strftime('%Y-%m-%d') if t.due_date else '' }}"
+           data-created="{{ t.created_at.strftime('%Y-%m-%dT%H:%M:%S') }}">
         <div class="d-flex justify-content-between">
           <div>
             <strong>[{{ t.priority }}]</strong>
@@ -284,6 +328,80 @@ TEMPLATE = """
   </div>
 </div>
 <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
+<script>
+  // クライアント側ソート + FLIP アニメーション
+  function priorityValue(p){
+    return p === 'High' ? 1 : (p === 'Mid' ? 2 : 3);
+  }
+  function parseDateString(s){
+    return s ? new Date(s) : new Date(8640000000000000); // nullは将来日にして最後にする
+  }
+
+  function sortTasks(option){
+    const container = document.getElementById('taskList');
+    const items = Array.from(container.children);
+    if(!items.length) return;
+
+    // 現在の位置を記録（First）
+    const firstRects = new Map();
+    items.forEach(el => firstRects.set(el.dataset.id, el.getBoundingClientRect()));
+
+    let sorted;
+    if(option === 'Priority'){
+      sorted = items.sort((a,b) => {
+        const pa = priorityValue(a.dataset.priority);
+        const pb = priorityValue(b.dataset.priority);
+        if(pa !== pb) return pa - pb;
+        const da = parseDateString(a.dataset.due);
+        const db = parseDateString(b.dataset.due);
+        if(da - db !== 0) return da - db;
+        return new Date(b.dataset.created) - new Date(a.dataset.created); // 新しい順
+      });
+    } else if(option === 'Due Date'){
+      sorted = items.sort((a,b) => {
+        const da = parseDateString(a.dataset.due);
+        const db = parseDateString(b.dataset.due);
+        if(da - db !== 0) return da - db;
+        return new Date(b.dataset.created) - new Date(a.dataset.created);
+      });
+    } else {
+      // Created At (Newest First)
+      sorted = items.sort((a,b) => new Date(b.dataset.created) - new Date(a.dataset.created));
+    }
+
+    // 新しい順でDOMに再配置（Last）
+    const fragment = document.createDocumentFragment();
+    sorted.forEach(el => fragment.appendChild(el));
+    container.appendChild(fragment);
+
+    // Invert -> Play を実行
+    sorted.forEach(el => {
+      const first = firstRects.get(el.dataset.id);
+      const last = el.getBoundingClientRect();
+      const dx = first.left - last.left;
+      const dy = first.top - last.top;
+      if(dx !== 0 || dy !== 0){
+        el.style.transition = 'none';
+        el.style.transform = `translate(${dx}px, ${dy}px)`;
+        requestAnimationFrame(() => {
+          el.style.transition = 'transform 300ms ease';
+          el.style.transform = '';
+        });
+        el.addEventListener('transitionend', function handler(){
+          el.style.transition = '';
+          el.style.transform = '';
+          el.removeEventListener('transitionend', handler);
+        });
+      }
+    });
+  }
+
+  // ページ読み込み時に現在の選択に合わせてクライアントでソート
+  document.addEventListener('DOMContentLoaded', () => {
+    const sel = document.getElementById('sortSelect');
+    if(sel && sel.value) sortTasks(sel.value);
+  });
+</script>
 </body>
 </html>
 """
